@@ -141,7 +141,7 @@ without changing client code.
 | `locale` (or `country`) | no | none | `IN` or `en-IN` — either form. See [Locales](#8-locales) |
 | `size` | no | `1024x1024` | `1024x1024`, `1024x1536`, `1536x1024`, `auto` |
 | `quality` | no | `low` | `low`, `medium`, `high`, `auto` |
-| `variations` | no | `1` | `1` to `3` — how many differently-angled images to return |
+| `variations` | no | `3` | `1` to `3` — how many differently-angled images to return |
 
 ```bash
 curl -X POST http://localhost:8300/image-transform/create \
