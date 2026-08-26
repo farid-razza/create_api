@@ -7,7 +7,7 @@ business.
 planner.
 
 > There is a second service, `create-api`, that does the same job in two calls. It is
-> slower but returns structured business data. See [Which one to use](#9-which-one-to-use).
+> slower but returns structured business data. 
 
 ---
 
