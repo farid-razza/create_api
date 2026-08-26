@@ -21,9 +21,8 @@ planner.
 6. [The response](#6-the-response)
 7. [Errors](#7-errors)
 8. [Locales](#8-locales)
-9. [Which one to use](#9-which-one-to-use)
-10. [Environment variables](#10-environment-variables)
-11. [The prompt](#11-the-prompt)
+9. [Environment variables](#10-environment-variables)
+10. [The prompt](#11-the-prompt)
 
 ---
 
@@ -251,9 +250,8 @@ wording, not a spec.
 ---
 
 
----
 
-## 10. Environment variables
+## 9. Environment variables
 
 | Variable | Required | Default | What it does |
 |---|---|---|---|
@@ -272,7 +270,7 @@ mode the two-step service does not have. A 12,664-character prompt was tested an
 
 ---
 
-## 11. The prompt
+## 10. The prompt
 
 The whole instruction lives in **`prompt.txt`**. It is plain text and can be edited
 without touching code. It is read once when the process starts, so a restart is needed
