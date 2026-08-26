@@ -250,34 +250,6 @@ wording, not a spec.
 
 ---
 
-## 9. Which one to use
-
-`create-api` does the same job in two calls. Both were run over the same 50 website texts
-across all 21 markets, and every image was audited by an independent vision pass:
-
-| | This service (one-step) | create-api (two-step) |
-|---|---|---|
-| AI calls | **1** | 2 |
-| p50 | **21.0s** | 32.7s |
-| Mean | **21.4s** | 32.3s |
-| Succeeded | **50/50** | 49/50 |
-| People match the locale | 50/50 | 49/49 |
-| Text-free images | 36/50 | **38/49** |
-| Returns the `business` block | no | **yes** |
-
-**This service is about 11 seconds faster and costs half as much.** It matched or beat
-two-step on everything except text leakage, where the difference (36/50 vs 38/49) is too
-small at this sample size to call decisive.
-
-**Use `create-api` instead when** you need the `business` block (name, industry, offering,
-tone, brand colours), or you want to inspect and log the plan before an image is
-generated.
-
-**A caveat that applies to both:** roughly a quarter of images contained some lettering
-despite the no-text rule — mostly incidental (labels, notes, book spines) but sometimes a
-real brand name such as DELL or NIKE. Neither pipeline prevents this; it is a limitation
-of the image model. If text-free output is a hard requirement, it needs a check after
-generation.
 
 ---
 
