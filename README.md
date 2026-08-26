@@ -1,4 +1,4 @@
-# Create API (one-step-process)
+# Create API (one-step)
 
 Give it the text of a business's website. It returns an advertising photograph for that
 business.
@@ -7,7 +7,7 @@ business.
 planner.
 
 > There is a second service, `create-api`, that does the same job in two calls. It is
-> slower but returns structured business data. 
+> slower but returns structured business data.
 
 ---
 
@@ -37,11 +37,16 @@ POST /image-transform/create
 **The pipeline:**
 
 ```
-1. You send the website text (and optionally a locale)
+1. You send the website text (and optionally a locale, and how many images you want)
 2. The text is placed into the prompt, along with the rules
-3. GPT-Image-2 generates the image
-4. You get it back as base64
+3. GPT-Image-2 generates each image — the calls run in parallel
+4. You get them back as base64, in a results array
 ```
+
+Ask for three and three calls run at once, so three images take about as long as one.
+Each gets a different creative angle from `variations.txt` — what to photograph.
+Everything else in the prompt is identical, so the images differ in framing and moment
+while staying about the same business.
 
 The image contains **no text of any kind** — no headline, price, sign copy, logo or
 lettering. It is a purely visual photograph.
@@ -59,6 +64,7 @@ create-onestep-api/
 ├── controller.py     reads the JSON body and validates it
 ├── service.py        builds the prompt and makes the one call
 ├── prompt.txt        the prompt template
+├── variations.txt    the creative angles, used when asking for more than one image
 ├── locales.py        the 21 supported markets
 └── requirements.txt
 ```
@@ -70,6 +76,7 @@ create-onestep-api/
 | `controller.py` | checks the request is valid, turns errors into status codes |
 | `service.py` | fills the prompt template, calls the image model, times it |
 | `prompt.txt` | plain text with placeholders, editable |
+| `variations.txt` | the angles, one per block, editable |
 | `locales.py` | country → locale, and who lives there |
 
 ---
@@ -134,6 +141,7 @@ without changing client code.
 | `locale` (or `country`) | no | none | `IN` or `en-IN` — either form. See [Locales](#8-locales) |
 | `size` | no | `1024x1024` | `1024x1024`, `1024x1536`, `1536x1024`, `auto` |
 | `quality` | no | `low` | `low`, `medium`, `high`, `auto` |
+| `variations` | no | `1` | `1` to `3` — how many differently-angled images to return |
 
 ```bash
 curl -X POST http://localhost:8300/image-transform/create \
@@ -142,7 +150,8 @@ curl -X POST http://localhost:8300/image-transform/create \
     "website_text": "Sharma Dental Care, Andheri West. Family and cosmetic dentistry since 2011. Painless root canals, whitening, braces and implants. Same-day appointments.",
     "locale": "en-IN",
     "size": "1024x1024",
-    "quality": "low"
+    "quality": "low",
+    "variations": 3
   }'
 ```
 
@@ -161,33 +170,46 @@ curl.exe -X POST http://localhost:8300/image-transform/create `
 ```jsonc
 {
   "level": "Create",
-  "image_base64": "iVBORw0KGgo...",   // raw base64, no "data:" prefix
-  "mime": "image/png",
   "size": "1024x1024",
   "quality": "low",
   "locale": "en-IN",
   "country": "IN",
-  "render_prompt": "...",              // the exact text sent to the image model
-  "usage": { "input": 1914, "output": 196, "total": 2110 },
-  "timing_ms": {
-    "plan":   0,                       // always 0 — there is no planner
-    "render": 21400,                   // the GPT-Image-2 call
-    "total":  21400
-  }
+  "variations": 3,
+  "results": [
+    {
+      "index": 1,
+      "angle": "Service in action",
+      "ok": true,
+      "image_base64": "iVBORw0KGgo...",   // raw base64, no "data:" prefix
+      "mime": "image/png",
+      "render_prompt": "...",              // the exact text sent for this image
+      "usage": { "input": 724, "output": 196, "total": 920 },
+      "timing_ms": { "render": 29600, "total": 29600 }
+    }
+    // ...one entry per variation
+  ],
+  "usage": { "input": 2181, "output": 588, "total": 2769 },   // all variations combined
+  "timing_ms": { "total": 29600 }                             // wall clock, not the sum
 }
 ```
 
-`timing_ms.plan` is always `0` and `total` always equals `render`. The field is kept so
-this response has the same shape as `create-api` and one tool can measure both.
+**Always a results array**, even when `variations` is 1 — then it holds one entry. The
+three angles are **Service in action**, **Customer moment** and **The place**.
+
+**One angle can fail without losing the others.** That entry comes back with
+`"ok": false` and an `error`, and the rest still contain images. Only when every
+variation fails does the endpoint return an error status.
 
 There is **no `business` block** — that comes from the planner, which this service does
 not have.
 
-**Saving the image:**
+**Saving the images:**
 
 ```python
 import base64
-open("out.png", "wb").write(base64.b64decode(response["image_base64"]))
+for r in response["results"]:
+    if r["ok"]:
+        open(f"out{r['index']}.png", "wb").write(base64.b64decode(r["image_base64"]))
 ```
 
 ---
@@ -244,12 +266,17 @@ platform — but a Create image contains no text, so a currency symbol or a date
 nothing to appear on. Those four fields are stored and unused.
 
 `locales.py` also holds a `people` description per market, written for this service. It
-is what turns `en-IN` into "Indian people". Read it before shipping — it is editorial
+is what turns `en-IN` into "Indian people".
+
+For a country with more than one large ethnic group the description is **weighted** — it
+says which group most faces should be, with the others still present but in the minority.
+Listing them as equal alternatives made the model choose at random, which produced people
+who did not look like the region. Read these before shipping — they are editorial
 wording, not a spec.
 
 ---
 
-
+---
 
 ## 9. Environment variables
 
@@ -276,10 +303,17 @@ The whole instruction lives in **`prompt.txt`**. It is plain text and can be edi
 without touching code. It is read once when the process starts, so a restart is needed
 after editing.
 
-Placeholders: `{website_text}`, `{people_scene}`, `{people_rule}`.
+Placeholders: `{website_text}`, `{people_scene}`, `{variation_angle}`, `{people_rule}`.
+The people placeholders are filled from the locale, the angle from `variations.txt`.
+
+**`variations.txt`** holds the angles, one per block separated by a line of `---`, each
+labelled by its `# name` line. Every angle requires people in frame, so the locale rule
+always has faces to apply to.
 
 The prompt tells the model to work out what the business is from its website text and
 photograph a fitting scene, forbids inventing a claim, award, price, rating or statistic,
 requires a believable photograph rather than an illustration, and bans text of any kind.
 
-Editing it changes output quality — re-test before quoting any number in this file.
+Editing either file changes output quality — re-test before quoting any number in this
+file. **Both are read once at startup, so restart the server after editing.** The same
+applies to `locales.py`.
