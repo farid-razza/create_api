@@ -71,6 +71,7 @@ Google Ads logo dimensions return **1**.
 | `locale` | no | none | `IN` or `en-IN`. Also accepted as `country`. |
 | `variations` | no | `3` (logos: `1`) | 1 to 3. |
 | `quality` | no | `low` | `low` · `medium` · `high` · `auto` |
+| `size` | no | — | Legacy. A raw `1024x1024` / `1024x1536` / `1536x1024` / `auto`, **`generic` only**. New integrations should use `dimension`. |
 
 \* Send **`input_text` or `brand_kit`**. A website hero can run on the brand kit
 alone; everything else needs `input_text`.
@@ -205,7 +206,7 @@ If a brand kit is sent with none of those four fields, you get a 400 naming them
   "results": [
     {
       "index": 1,
-      "angle": "Service in action",     // null for single-image dimensions
+      "angle": "Service in action",     // null whenever only one image is returned
       "ok": true,
       "image_base64": "iVBORw0KGgo...", // raw base64, no "data:" prefix
       "mime": "image/png",
@@ -249,9 +250,14 @@ Every failure returns the same shape:
 **There is only ever one shape** — no arrays, no nested detail objects. You never
 need to branch on the response body.
 
+**A field of the wrong type is rejected, not ignored.** `"dimension": 5` returns
+`dimension must be a string` rather than quietly falling back to the default and
+returning a correct-looking image at the wrong size. Fields the API does not know
+are ignored.
+
 | Status | Meaning | Examples |
 |---|---|---|
-| **400** | something in the request, or the content | `input_text is required (or send a brand_kit for a website hero)` · `image_type must be one of: generic, meta, gbp, google_ads, website` · `dimension 'gads_square' belongs to image_type 'google_ads', not 'meta'` · `dimension 'gads_logo_square' returns at most 1 image(s); 3 requested` · `brand_kit applies to a website hero only` · `unknown locale 'ZZ'` (the message lists every valid value) · **`request rejected by the OpenAI safety system`** |
+| **400** | something in the request, or the content | `input_text is required (or send a brand_kit for a website hero)` · `image_type must be one of: generic, meta, gbp, google_ads, website` · `dimension 'gads_square' belongs to image_type 'google_ads', not 'meta'` · `dimension 'gads_logo_square' returns at most 1 image(s); 3 requested` · `brand_kit applies to a website hero only` · `unknown locale 'ZZ'` (the message lists every valid value) · `dimension must be a string` · **`request rejected by the OpenAI safety system`** (only when *every* variation was refused) |
 | **502** | the image model failed | `image model error: ...` · `image model returned no image` |
 | **500** | the service is misconfigured | `OPENAI_API_KEY is not set` · `prompt.txt missing` |
 
@@ -338,8 +344,7 @@ Create a `.env` in this folder:
 OPENAI_API_KEY=sk-...
 ```
 
-**Windows PowerShell** — the `cd` is required, because the prompt files are found
-relative to it:
+**Windows PowerShell** — the `cd` is required so `uvicorn` can import `app`:
 
 ```powershell
 cd D:\Downloads\transform-image-python\create-onestep-api
@@ -449,8 +454,9 @@ the images differ in framing while staying about the same business.
 The locale block and the variation angle are **appended** to a platform prompt
 rather than written into it, so the platform prompts stay exactly as written.
 
-**All prompt files are read once at startup — restart the server after editing
-any of them**, including `locales.py`.
+**Prompt files are read once and then cached — restart the server after editing
+any of them**, including `locales.py`. Editing a prompt on a running server has no
+effect.
 
 ### The no-text rule, and its one exception
 
