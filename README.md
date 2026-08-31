@@ -1,107 +1,345 @@
-# Create API (one-step)
+# Create API
 
-Give it the text of a business's website. It returns an advertising photograph for that
-business.
+One endpoint that turns **text into a marketing image**.
 
-**One AI call.** The website text goes straight into the image prompt — there is no
-planner.
-
-> There is a second service, `create-api`, that does the same job in two calls. It is
-> slower but returns structured business data.
-
----
-
-## Contents
-
-1. [What it does](#1-what-it-does)
-2. [Files](#2-files)
-3. [Setup](#3-setup)
-4. [Running the server](#4-running-the-server)
-5. [Calling the endpoint](#5-calling-the-endpoint)
-6. [The response](#6-the-response)
-7. [Errors](#7-errors)
-8. [Locales](#8-locales)
-9. [Environment variables](#10-environment-variables)
-10. [The prompt](#11-the-prompt)
-
----
-
-## 1. What it does
-
-**One endpoint:**
+You send some text and say which platform it is for. The service picks the right
+prompt, generates the image, and returns it at the exact pixel size that platform
+needs.
 
 ```
 POST /image-transform/create
 ```
 
-**The pipeline:**
-
-```
-1. You send the website text (and optionally a locale, and how many images you want)
-2. The text is placed into the prompt, along with the rules
-3. GPT-Image-2 generates each image — the calls run in parallel
-4. You get them back as base64, in a results array
-```
-
-Ask for three and three calls run at once, so three images take about as long as one.
-Each gets a different creative angle from `variations.txt` — what to photograph.
-Everything else in the prompt is identical, so the images differ in framing and moment
-while staying about the same business.
-
-The image contains **no text of any kind** — no headline, price, sign copy, logo or
-lettering. It is a purely visual photograph.
-
-There is no uploaded photo and no brand kit. Everything comes from the website text.
+**Generated images contain no text.** No words, headlines, captions, prices,
+watermarks or logos. The text you send decides *what the scene shows* — it is never
+drawn into the image. (One exception: Google Ads *logo* dimensions, covered below.)
 
 ---
 
-## 2. Files
+## Contents
 
-```
-create-onestep-api/
-├── app.py            FastAPI entrypoint, CORS, /health
-├── router.py         the routes
-├── controller.py     reads the JSON body and validates it
-├── service.py        builds the prompt and makes the one call
-├── prompt.txt        the prompt template
-├── variations.txt    the creative angles, used when asking for more than one image
-├── locales.py        the 21 supported markets
-└── requirements.txt
+1. [The one thing to understand](#1-the-one-thing-to-understand)
+2. [Request fields](#2-request-fields)
+3. [Platforms and dimensions](#3-platforms-and-dimensions)
+4. [What text to send](#4-what-text-to-send)
+5. [The response](#5-the-response)
+6. [Errors](#6-errors)
+7. [Locales](#7-locales)
+8. [Building a UI on this](#8-building-a-ui-on-this)
+9. [Setup and running](#9-setup-and-running)
+10. [Files](#10-files)
+11. [The prompts](#11-the-prompts)
+
+---
+
+## 1. The one thing to understand
+
+**`image_type` decides which prompt runs. `dimension` decides the pixel size.**
+
+That is the whole design. Same URL every time; the payload changes the behaviour.
+
+```jsonc
+// a Facebook / Instagram story
+{ "input_text": "Book your fall security check today.",
+  "image_type": "meta", "dimension": "meta_story" }          → 1080 × 1920
+
+// a website hero from a brand kit
+{ "brand_kit": { ... },
+  "image_type": "website", "dimension": "website_hero" }     → 1920 × 1080
+
+// no platform named — a general marketing image
+{ "input_text": "Sharma Dental Care. Family dentistry since 2011..." }
+                                                             → 1024 × 1024
 ```
 
-| File | Responsibility |
+That last one is `image_type: "generic"`, the default. If you send no
+`image_type`, you get a general marketing image at a standard size.
+
+**You get 3 images per request** (three different angles on the same business).
+Google Ads logo dimensions return **1**.
+
+---
+
+## 2. Request fields
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `input_text` | yes\* | — | The source text. Aliases: `website_text`, `post_text`. Minimum 20 characters. |
+| `brand_kit` | yes\* | — | Object or JSON string. **Website hero only.** |
+| `image_type` | no | `generic` | `generic` · `meta` · `gbp` · `google_ads` · `website` |
+| `dimension` | no | that platform's default | A named key from the table below — **not** a `WxH` string. |
+| `locale` | no | none | `IN` or `en-IN`. Also accepted as `country`. |
+| `variations` | no | `3` (logos: `1`) | 1 to 3. |
+| `quality` | no | `low` | `low` · `medium` · `high` · `auto` |
+
+\* Send **`input_text` or `brand_kit`**. A website hero can run on the brand kit
+alone; everything else needs `input_text`.
+
+> `quality` defaults to `low`, which is the usual reason an image looks soft. Use
+> `"quality": "high"` for anything a client will see. It costs more per image.
+
+**`dimension` is a name, not a size.** Pixel sizes are not unique — Google Ads
+"Square" and "Logo Square" are both 1200×1200, and Google Ads landscape (1200×628)
+is nearly Meta landscape (1200×630). Only the name says which you want.
+
+---
+
+## 3. Platforms and dimensions
+
+Get this list from **`GET /catalog`** rather than hard-coding it.
+
+### generic — no particular platform (the default)
+
+| `dimension` | You receive |
 |---|---|
-| `app.py` | starts the app, enables CORS, adds `/health` |
-| `router.py` | maps URL paths to the controller |
-| `controller.py` | checks the request is valid, turns errors into status codes |
-| `service.py` | fills the prompt template, calls the image model, times it |
-| `prompt.txt` | plain text with placeholders, editable |
-| `variations.txt` | the angles, one per block, editable |
-| `locales.py` | country → locale, and who lives there |
+| `generic_square` ← default | 1024 × 1024 |
+| `generic_portrait` | 1024 × 1536 |
+| `generic_landscape` | 1536 × 1024 |
+| `generic_auto` | model chooses |
+
+### meta — Facebook / Instagram
+
+| `dimension` | You receive | |
+|---|---|---|
+| `meta_square` ← default | 1080 × 1080 | Feed square |
+| `meta_portrait` | 1080 × 1350 | Feed portrait |
+| `meta_story` | 1080 × 1920 | Story / Reel |
+| `meta_landscape` | 1200 × 630 | Facebook landscape |
+
+### gbp — Google Business Profile
+
+| `dimension` | You receive | |
+|---|---|---|
+| `gbp_square` ← default | 1080 × 1080 | Recommended |
+| `gbp_square_min` | 720 × 720 | Minimum accepted |
+
+### google_ads — Performance Max
+
+| `dimension` | You receive | |
+|---|---|---|
+| `gads_square` ← default | 1200 × 1200 | photo |
+| `gads_landscape` | 1200 × 628 | photo |
+| `gads_portrait` | 1200 × 1500 | photo |
+| `gads_logo_square` | 1200 × 1200 | **logo — transparent PNG, 1 image** |
+| `gads_logo_wide` | 1200 × 300 | **logo — transparent PNG, 1 image** |
+
+### website
+
+| `dimension` | You receive | |
+|---|---|---|
+| `website_hero` ← default | 1920 × 1080 | takes a brand kit |
+| `website_hero_banner` | 1920 × 600 | takes a brand kit |
+| `website_section` | 1200 × 628 | that section's own text |
+| `website_sidebar_250` | 300 × 250 | card |
+| `website_sidebar_600` | 300 × 600 | card |
+| `website_sidebar_square` | 300 × 300 | card |
+| `website_sidebar_portrait` | 300 × 375 | card |
+
+**Mixing platforms is rejected.** `image_type: "meta"` with
+`dimension: "gads_square"` returns 400.
+
+> **Why the delivered size is not what the model generates.** GPT-Image-2 only
+> accepts sizes where both edges divide by 16, the pixel count is 655,360–8,294,400,
+> and the ratio is at most 3:1. Almost no real platform size qualifies. So each
+> dimension is generated at the nearest valid size and centre-cropped to the exact
+> delivered pixels. Images are scaled to fill and cropped — **never stretched**.
+> You do not need to do anything; you always receive the size in the table.
 
 ---
 
-## 3. Setup
+## 4. What text to send
+
+The prompts read the text differently, so send the right kind for the platform.
+
+| `image_type` / dimension | Send | In which field |
+|---|---|---|
+| `generic` | the business's website text | `input_text` |
+| `meta` | the social post text | `input_text` |
+| `gbp` | the GBP post text | `input_text` |
+| `google_ads` photo sizes | the ad text, or a description of the business | `input_text` |
+| `google_ads` logo sizes | a description of the business, so the symbol suits it | `input_text` |
+| `website_hero`, `website_hero_banner` | the brand kit (preferred), or plain text about the business | `brand_kit`, or `input_text` |
+| `website_section` | that section's own content | `input_text` |
+| `website_sidebar_*` | that card's own content | `input_text` |
+
+**Why it matters:** the Meta prompt reads the text as *one post* and depicts that
+message. The website hero prompt reads it as *a description of the business* and
+depicts what the business does. Sending a business description to `meta` still
+works, but you get a generic business shot rather than a post image.
+
+The full text is passed through as-is. URLs, phone numbers and hashtags are left
+in; the prompt tells the model not to draw them.
+
+### The brand kit
+
+For `website_hero` and `website_hero_banner`, send the whole brand kit. Only these
+**four** fields are used; everything else is ignored:
+
+- `contents_long_description`
+- `contents_area_of_focus`
+- `style_inspirations_brand_personality_traits`
+- `brand_archetype`
+
+Field names match loosely — `brand_archetype`, `brandArchetype` and
+`Brand Archetype` all work. The brand kit is accepted as an object **or** as a
+JSON string, including one with stray text stuck to it from a copy/paste.
+
+If a brand kit is sent with none of those four fields, you get a 400 naming them.
+
+---
+
+## 5. The response
+
+```jsonc
+{
+  "level": "Create",
+  "image_type": "meta",
+  "dimension": "meta_story",
+  "size": "1080x1920",           // exactly what you received
+  "kind": "photo",               // "photo" or "logo"
+  "transparent_png": false,      // true for logo dimensions
+  "quality": "low",
+  "locale": "en-IN",             // null if none sent
+  "country": "IN",
+  "variations": 3,
+  "results": [
+    {
+      "index": 1,
+      "angle": "Service in action",     // null for single-image dimensions
+      "ok": true,
+      "image_base64": "iVBORw0KGgo...", // raw base64, no "data:" prefix
+      "mime": "image/png",
+      "render_prompt": "...",           // the exact prompt used
+      "usage": { "input": 724, "output": 196, "total": 920 },
+      "timing_ms": { "render": 20500, "total": 20500 }
+    }
+    // ...one entry per variation
+  ],
+  "usage": { "input": 2181, "output": 588, "total": 2769 },  // all combined
+  "timing_ms": { "total": 20500 }        // wall clock, not the sum
+}
+```
+
+**Always a `results` array**, even when it holds one entry.
+
+**One variation can fail without losing the others.** That entry comes back with
+`"ok": false` and an `error`, and the rest still contain images. Only if every
+variation fails does the request return an error status.
+
+The three variations run **in parallel**, so three images take about as long as one.
+
+**Saving the images:**
+
+```javascript
+response.results
+  .filter(r => r.ok)
+  .forEach(r => { img.src = "data:image/png;base64," + r.image_base64; });
+```
+
+---
+
+## 6. Errors
+
+Every failure returns the same shape:
+
+```json
+{ "error": "a message explaining what to fix" }
+```
+
+**There is only ever one shape** — no arrays, no nested detail objects. You never
+need to branch on the response body.
+
+| Status | Meaning | Examples |
+|---|---|---|
+| **400** | something in the request, or the content | `input_text is required (or send a brand_kit for a website hero)` · `image_type must be one of: generic, meta, gbp, google_ads, website` · `dimension 'gads_square' belongs to image_type 'google_ads', not 'meta'` · `dimension 'gads_logo_square' returns at most 1 image(s); 3 requested` · `brand_kit applies to a website hero only` · `unknown locale 'ZZ'` (the message lists every valid value) · **`request rejected by the OpenAI safety system`** |
+| **502** | the image model failed | `image model error: ...` · `image model returned no image` |
+| **500** | the service is misconfigured | `OPENAI_API_KEY is not set` · `prompt.txt missing` |
+
+> **Safety blocks are not consistent.** OpenAI sometimes flags an image for a
+> category such as `illicit` — security, locksmith and alarm businesses trip this
+> most. The same request can pass on one attempt and be blocked on the next, so
+> **retrying often just works**. It is not retried automatically. Every prompt
+> already asks for lawful, safe scenes to reduce false flags.
+
+---
+
+## 7. Locales
+
+The locale decides **who appears in the image**. `en-IN` produces Indian people,
+`ja-JP` produces Japanese people. It applies to every platform.
+
+Send either form:
+
+```json
+{ "locale": "IN" }      { "locale": "en-IN" }      { "country": "IN" }
+```
+
+21 markets: `US CA GB IE AU NZ IN SG MY PH FR DE ES IT NL MX BR JP KR ZA AE`
+
+Get the list from **`GET /locales`**.
+
+`locale` is **optional**, and there is no default. Omit it and the image model
+chooses the people itself — so if the market matters, always send it. The response
+echoes `locale: null` when none was used.
+
+Logo dimensions ignore locale — a logo has no people in it.
+
+---
+
+## 8. Building a UI on this
+
+**Build your controls from `GET /catalog`.** It is generated from the backend's own
+dimension table, so it cannot fall out of step with what the API accepts.
+
+```jsonc
+{
+  "default_image_type": "generic",
+  "image_types": [
+    {
+      "image_type": "meta",
+      "default_dimension": "meta_square",
+      "dimensions": [
+        { "dimension": "meta_story", "size": "1080x1920",
+          "width": 1080, "height": 1920,
+          "aspect": "tall vertical full-screen (9:16)",
+          "kind": "photo", "transparent_png": false,
+          "max_variations": 3 }
+      ]
+    }
+  ]
+}
+```
+
+Suggested flow:
+
+1. Platform dropdown ← `image_types[].image_type`
+2. Size dropdown ← that platform's `dimensions[]`, preselect `default_dimension`
+3. Variations control ← cap at `max_variations`; **hide or disable it when
+   `max_variations` is 1** (the logo assets), so the user cannot send a request
+   that would be rejected
+4. Show `transparent_png: true` as a hint that the result has no background
+5. Locale dropdown ← `GET /locales`
+
+Nothing needs hard-coding. Adding a platform or size later shows up in `/catalog`
+automatically.
+
+---
+
+## 9. Setup and running
 
 ```bash
 cd create-onestep-api
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in this folder:
+Create a `.env` in this folder:
 
 ```
 OPENAI_API_KEY=sk-...
 ```
 
-`.env.example` lists every available setting.
-
----
-
-## 4. Running the server
-
-**Windows PowerShell** — the `cd` is required, because `prompt.txt` is found relative to
-it:
+**Windows PowerShell** — the `cd` is required, because the prompt files are found
+relative to it:
 
 ```powershell
 cd D:\Downloads\transform-image-python\create-onestep-api
@@ -117,203 +355,111 @@ uvicorn app:app --reload --port 8300
 Check it is alive:
 
 ```bash
-curl http://localhost:8300/health
-```
-```json
-{"ok": true}
+curl http://localhost:8300/health      # {"ok": true}
 ```
 
 Interactive API docs: <http://localhost:8300/docs>
 
-Port 8300, so it can run at the same time as `create-api` on 8200.
-
----
-
-## 5. Calling the endpoint
-
-`POST /image-transform/create` with a JSON body. **The request is identical to
-`create-api`** — only the port differs, so you can switch between the two services
-without changing client code.
-
-| Field | Required | Default | Values |
-|---|---|---|---|
-| `website_text` | **yes** | — | the site's text, minimum 20 characters |
-| `locale` (or `country`) | no | none | `IN` or `en-IN` — either form. See [Locales](#8-locales) |
-| `size` | no | `1024x1024` | `1024x1024`, `1024x1536`, `1536x1024`, `auto` |
-| `quality` | no | `low` | `low`, `medium`, `high`, `auto` |
-| `variations` | no | `3` | `1` to `3` — how many differently-angled images to return |
+### Example calls
 
 ```bash
+# Instagram story
 curl -X POST http://localhost:8300/image-transform/create \
   -H "Content-Type: application/json" \
-  -d '{
-    "website_text": "Sharma Dental Care, Andheri West. Family and cosmetic dentistry since 2011. Painless root canals, whitening, braces and implants. Same-day appointments.",
-    "locale": "en-IN",
-    "size": "1024x1024",
-    "quality": "low",
-    "variations": 3
-  }'
+  -d '{"input_text":"Book your fall security check today. Evening slots available.",
+       "image_type":"meta","dimension":"meta_story","locale":"en-US","quality":"high"}'
+
+# Google Ads wide logo — transparent PNG, one image
+curl -X POST http://localhost:8300/image-transform/create \
+  -H "Content-Type: application/json" \
+  -d '{"input_text":"A family-run bakery making sourdough and pastries since 1994.",
+       "image_type":"google_ads","dimension":"gads_logo_wide"}'
+
+# Website hero from a brand kit — no input_text needed
+curl -X POST http://localhost:8300/image-transform/create \
+  -H "Content-Type: application/json" \
+  -d '{"image_type":"website","dimension":"website_hero","quality":"high",
+       "brand_kit":{"contents_long_description":"A family-owned painting company serving Greater Philadelphia since 1979.",
+                    "contents_area_of_focus":["Residential painting","Cabinet painting"],
+                    "style_inspirations_brand_personality_traits":"Dependable, Family-Oriented",
+                    "brand_archetype":"Everyman"}}'
 ```
 
-**PowerShell** (quoting differs):
+**PowerShell** quoting differs:
 
 ```powershell
 curl.exe -X POST http://localhost:8300/image-transform/create `
   -H "Content-Type: application/json" `
-  -d '{\"website_text\":\"Sharma Dental Care. Family dentistry since 2011.\",\"locale\":\"en-IN\"}'
+  -d '{\"input_text\":\"Book your fall security check today.\",\"image_type\":\"meta\"}'
 ```
 
----
-
-## 6. The response
-
-```jsonc
-{
-  "level": "Create",
-  "size": "1024x1024",
-  "quality": "low",
-  "locale": "en-IN",
-  "country": "IN",
-  "variations": 3,
-  "results": [
-    {
-      "index": 1,
-      "angle": "Service in action",
-      "ok": true,
-      "image_base64": "iVBORw0KGgo...",   // raw base64, no "data:" prefix
-      "mime": "image/png",
-      "render_prompt": "...",              // the exact text sent for this image
-      "usage": { "input": 724, "output": 196, "total": 920 },
-      "timing_ms": { "render": 29600, "total": 29600 }
-    }
-    // ...one entry per variation
-  ],
-  "usage": { "input": 2181, "output": 588, "total": 2769 },   // all variations combined
-  "timing_ms": { "total": 29600 }                             // wall clock, not the sum
-}
-```
-
-**Always a results array**, even when `variations` is 1 — then it holds one entry. The
-three angles are **Service in action**, **Customer moment** and **The place**.
-
-**One angle can fail without losing the others.** That entry comes back with
-`"ok": false` and an `error`, and the rest still contain images. Only when every
-variation fails does the endpoint return an error status.
-
-There is **no `business` block** — that comes from the planner, which this service does
-not have.
-
-**Saving the images:**
-
-```python
-import base64
-for r in response["results"]:
-    if r["ok"]:
-        open(f"out{r['index']}.png", "wb").write(base64.b64decode(r["image_base64"]))
-```
-
----
-
-## 7. Errors
-
-Every failure returns `{"error": "..."}` with a status that says whose problem it is.
-
-| Status | Meaning | Examples |
-|---|---|---|
-| **400** | the request, or the content | `website_text is required` · `website_text is too short to describe a business` · `unknown locale 'ZZ'` (the message lists every valid value) · `size must be one of: ...` · `request rejected by the OpenAI safety system` |
-| **502** | the OpenAI call failed | `image model error: ...` · `image model returned no image` |
-| **500** | this service is misconfigured | `OPENAI_API_KEY is not set` · `prompt.txt missing` |
-
-Safety rejections are `400` rather than `500` because they are a fact about the input,
-not a server fault.
-
----
-
-## 8. Locales
-
-The locale decides **who appears in the image**. `en-IN` produces Indian people, `ja-JP`
-produces Japanese people, and so on.
-
-Send either form — a country code or a locale string:
-
-```json
-{"locale": "IN"}       {"locale": "en-IN"}       {"country": "IN"}
-```
-
-21 markets are supported:
-
-```
-US  CA  GB  IE  AU  NZ  IN  SG  MY  PH  FR
-DE  ES  IT  NL  MX  BR  JP  KR  ZA  AE
-```
-
-To get the list programmatically:
-
-```bash
-curl http://localhost:8300/locales
-```
-
-`locale` is optional. Without it, the image model is given no instruction about who the
-people are.
-
-In `prompt.txt` the locale appears **twice** — once as scene direction and once as a hard
-rule covering everyone in the frame, including the background. Both blocks are visible in
-the file and can be edited.
-
-**Only the locale affects the image.** `locales.py` also stores each market's currency,
-timezone, date format and first day of week, so this service agrees with the rest of the
-platform — but a Create image contains no text, so a currency symbol or a date has
-nothing to appear on. Those four fields are stored and unused.
-
-`locales.py` also holds a `people` description per market, written for this service. It
-is what turns `en-IN` into "Indian people".
-
-For a country with more than one large ethnic group the description is **weighted** — it
-says which group most faces should be, with the others still present but in the minority.
-Listing them as equal alternatives made the model choose at random, which produced people
-who did not look like the region. Read these before shipping — they are editorial
-wording, not a spec.
-
----
-
----
-
-## 9. Environment variables
+### Environment variables
 
 | Variable | Required | Default | What it does |
 |---|---|---|---|
 | `OPENAI_API_KEY` | **yes** | — | your OpenAI key |
 | `OPENAI_IMAGE_MODEL` | no | `gpt-image-2` | the image model |
-| `MAX_WEBSITE_CHARS` | no | `12000` | website text is truncated to this |
-| `OPENAI_TIMEOUT` | no | `300` | seconds to wait for the call |
+| `MAX_WEBSITE_CHARS` | no | `12000` | text is truncated to this |
+| `OPENAI_TIMEOUT` | no | `300` | seconds to wait per call |
+| `LOGO_BACKGROUND_TOLERANCE` | no | `30` | 0–255. How aggressively a logo's background is made transparent. Higher removes more but can eat into the logo. |
 
-The key is read on the first request, not at startup, so the server starts and `/health`
-answers without one.
-
-`MAX_WEBSITE_CHARS` is lower here than in `create-api` (12000 vs 20000). This service
-puts the whole website text into the image prompt, so an oversized prompt is a failure
-mode the two-step service does not have. A 12,664-character prompt was tested and worked;
-12000 stays just inside that.
+The key is read on the first request, not at startup, so the server starts and
+`/health` answers without one.
 
 ---
 
-## 10. The prompt
+## 10. Files
 
-The whole instruction lives in **`prompt.txt`**. It is plain text and can be edited
-without touching code. It is read once when the process starts, so a restart is needed
-after editing.
+```
+create-onestep-api/
+├── app.py                 FastAPI entrypoint, CORS, /health
+├── router.py              the routes
+├── controller.py          reads the JSON body and validates it
+├── service.py             resolve dimension → prompt → generate → exact size
+├── dimensions.py          the 22 dimensions: generated size vs delivered size
+├── platform_prompts.py    the meta / gbp / google_ads / website prompts
+├── prompt.txt             the `generic` prompt
+├── variations.txt         the three creative angles
+├── brand_kit.py           pulls the four hero fields out of a brand kit
+├── image_postprocess.py   cover-crop to exact size; logo background → transparent
+├── locales.py             the 21 markets
+└── requirements.txt
+```
 
-Placeholders: `{website_text}`, `{people_scene}`, `{variation_angle}`, `{people_rule}`.
-The people placeholders are filled from the locale, the angle from `variations.txt`.
+Two files to read first if you are changing behaviour: **`platform_prompts.py`**
+(how images turn out) and **`dimensions.py`** (everything about sizes).
 
-**`variations.txt`** holds the angles, one per block separated by a line of `---`, each
-labelled by its `# name` line. Every angle requires people in frame, so the locale rule
-always has faces to apply to.
+`dimensions.py` validates every generation size **at import**. If a size breaks
+GPT-Image-2's rules the service refuses to start, rather than failing later on one
+dimension in production.
 
-The prompt tells the model to work out what the business is from its website text and
-photograph a fitting scene, forbids inventing a claim, award, price, rating or statistic,
-requires a believable photograph rather than an illustration, and bans text of any kind.
+---
 
-Editing either file changes output quality — re-test before quoting any number in this
-file. **Both are read once at startup, so restart the server after editing.** The same
-applies to `locales.py`.
+## 11. The prompts
+
+| Platform | Prompt |
+|---|---|
+| `generic` | `prompt.txt` + an angle from `variations.txt` |
+| `meta`, `gbp`, `google_ads`, `website` | `platform_prompts.py` |
+
+The three angles are **Service in action**, **Customer moment** and **The place** —
+what to photograph. Everything else in the prompt stays identical between them, so
+the images differ in framing while staying about the same business.
+
+The locale block and the variation angle are **appended** to a platform prompt
+rather than written into it, so the platform prompts stay exactly as written.
+
+**All prompt files are read once at startup — restart the server after editing
+any of them**, including `locales.py`.
+
+### The no-text rule, and its one exception
+
+Every prompt forbids text, invented awards, trust badges, review stars and
+fabricated business details. Images get published, so a garbled phone number or a
+made-up award would be a real problem.
+
+**The exception is the two Google Ads logo dimensions**, which must produce an
+actual logo. Even there the no-text rule holds: the logo is a purely graphical
+symbol with **no business name, wordmark, monogram or initials**. It is generated
+on a plain white background, which is then flood-filled away to give you a
+transparent PNG.
