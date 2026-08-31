@@ -64,8 +64,8 @@ Google Ads logo dimensions return **1**.
 
 | Field | Required | Default | Notes |
 |---|---|---|---|
-| `input_text` | yes\* | — | The source text. Aliases: `website_text`, `post_text`. Minimum 20 characters. |
-| `brand_kit` | yes\* | — | Object or JSON string. **Website hero only.** |
+| `input_text` | **yes** — except the two heroes | — | The source text. Aliases: `website_text`, `post_text`. Minimum 20 characters. |
+| `brand_kit` | no | — | **Only `website_hero` and `website_hero_banner`.** Sending it with any other dimension returns 400. Object or JSON string. |
 | `image_type` | no | `generic` | `generic` · `meta` · `gbp` · `google_ads` · `website` |
 | `dimension` | no | that platform's default | A named key from the table below — **not** a `WxH` string. |
 | `locale` | no | none | `IN` or `en-IN`. Also accepted as `country`. |
@@ -73,8 +73,13 @@ Google Ads logo dimensions return **1**.
 | `quality` | no | `low` | `low` · `medium` · `high` · `auto` |
 | `size` | no | — | Legacy. A raw `1024x1024` / `1024x1536` / `1536x1024` / `auto`, **`generic` only**. New integrations should use `dimension`. |
 
-\* Send **`input_text` or `brand_kit`**. A website hero can run on the brand kit
-alone; everything else needs `input_text`.
+**`brand_kit` is never required.** It is an alternative input that only the two
+website hero dimensions accept:
+
+| Dimension | Send |
+|---|---|
+| `website_hero`, `website_hero_banner` | `brand_kit` **or** `input_text` — at least one. If you send both, the **brand kit wins** and `input_text` is ignored. |
+| everything else (all 20 other dimensions) | `input_text`. A `brand_kit` here is rejected with `brand_kit applies to a website hero only`. |
 
 > `quality` defaults to `low`, which is the usual reason an image looks soft. Use
 > `"quality": "high"` for anything a client will see. It costs more per image.
